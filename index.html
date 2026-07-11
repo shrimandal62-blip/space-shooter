@@ -3,256 +3,480 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Galaxy Space Shooter - Shield & Explosions</title>
-    <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+    <title>Space Shooter with Live Leaderboard</title>
+    <!-- Supabase CDN Link -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <style>
-        body { margin: 0; padding: 0; background-color: #000; overflow: hidden; }
-        canvas { display: block; margin: 0 auto; }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { background: #000; color: #fff; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; overflow: hidden; position: fixed; width: 100%; height: 100%; }
+        #gameContainer { position: relative; width: 100vw; height: 100vh; max-width: 600px; margin: 0 auto; background: radial-gradient(circle, #111 0%, #000 100%); overflow: hidden; box-shadow: 0 0 20px rgba(0,255,255,0.2); }
+        canvas { display: block; width: 100%; height: 100%; }
+        
+        /* HUD UI */
+        .hud-text { position: absolute; font-size: 18px; font-weight: bold; text-shadow: 2px 2px #000; font-family: monospace; z-index: 10; }
+        #scoreBoard { top: 15px; left: 15px; color: #00ffff; }
+        #shieldBoard { top: 15px; right: 15px; color: #00ff00; }
+        
+        /* Screens Styles */
+        .screen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; background: rgba(0,0,0,0.85); z-index: 20; color: #fff; text-align: center; padding: 20px; }
+        .hidden { display: none !important; }
+        h1 { font-size: 36px; color: #00ffff; text-shadow: 0 0 10px #00ffff; margin-bottom: 20px; animation: glow 1.5s ease-in-out infinite alternate; }
+        @keyframes glow { from { text-shadow: 0 0 10px #00ffff; } to { text-shadow: 0 0 20px #00ffff, 0 0 30px #00bcd4; } }
+        
+        button { background: linear-gradient(45deg, #00ffff, #00bcd4); border: none; color: #000; padding: 12px 30px; font-size: 18px; font-weight: bold; border-radius: 25px; cursor: pointer; transition: 0.3s; box-shadow: 0 0 15px rgba(0,255,255,0.4); margin: 10px 0; width: 80%; max-width: 250px; }
+        button:active { transform: scale(0.95); }
+        
+        /* Leaderboard UI */
+        .leaderboard-box { width: 90%; max-width: 320px; background: rgba(255,255,255,0.05); border: 1px solid #00ffff; border-radius: 10px; padding: 15px; margin: 15px 0; max-height: 200px; overflow-y: auto; }
+        .lb-row { display: flex; justify-content: space-between; padding: 6px 10px; border-bottom: 1px solid rgba(0,255,255,0.1); font-family: monospace; font-size: 14px; }
+        .lb-row:last-child { border: none; }
+        .rank { color: #ffeb3b; font-weight: bold; }
+        .p-name { flex-grow: 1; text-align: left; margin-left: 10px; color: #fff; }
+        .p-score { color: #00ffff; font-weight: bold; }
+        
+        /* Input Form */
+        .input-group { display: flex; flex-direction: column; align-items: center; width: 100%; margin: 15px 0; }
+        input[type="text"] { background: rgba(0,0,0,0.6); border: 2px solid #00ffff; border-radius: 20px; padding: 10px 15px; color: #fff; font-size: 16px; text-align: center; width: 80%; max-width: 250px; margin-bottom: 10px; outline: none; }
+        input:focus { box-shadow: 0 0 10px #00ffff; }
+        
+        /* Touch Controls overlay */
+        #touchOverlay { position: absolute; bottom: 0; left: 0; width: 100%; height: 50%; z-index: 5; }
     </style>
 </head>
 <body>
 
-<script>
-    const config = {
-        type: Phaser.AUTO,
-        width: 450,
-        height: 800,
-        physics: {
-            default: 'arcade',
-            arcade: { gravity: { y: 0 }, debug: false }
-        },
-        scene: { preload: preload, create: create, update: update }
-    };
-
-    const game = new Phaser.Game(config);
-    let player, background, bullets, enemies, enemyBullets, powerUps, particleEmitter;
-    let shieldGraphics; // शील्ड का विज़ुअल दिखाने के लिए
-    let lastFired = 0, score = 0, health = 100;
-    let scoreText, waveText, healthBar;
+<div id="gameContainer">
+    <div id="scoreBoard" class="hud-text">SCORE: 0</div>
+    <div id="shieldBoard" class="hud-text">SHIELD: 100%</div>
     
-    let currentWave = 1, maxWaves = 7;
-    let enemiesLeftToSpawn = 5, enemiesKilledInWave = 0;
-    let spawnTimer, enemyShootTimer;
+    <canvas id="gameCanvas"></canvas>
+    <div id="touchOverlay"></div>
 
-    let gunLevel = 1; 
-    let isShieldActive = false; // क्या शील्ड ऑन है?
+    <!-- Start Screen -->
+    <div id="startScreen" class="screen">
+        <h1>SPACE SHOOTER</h1>
+        <p style="color: #aaa; margin-bottom: 20px;">फिंगर से ड्रैग करके चलाएं। शिप अपने आप शूट करेगा!</p>
+        <button id="startBtn">PLAY GAME</button>
+        
+        <h3 style="color: #00ffff; margin-top: 15px; font-size: 16px;">🏆 GLOBAL TOP 10</h3>
+        <div id="startLeaderboard" class="leaderboard-box">Loading scores...</div>
+    </div>
 
-    function preload() {
-        this.load.image('space', 'https://labs.phaser.io/assets/skies/space.jpg');
-        this.load.image('ship', 'https://labs.phaser.io/assets/sprites/fmship.png');
-        this.load.image('bullet', 'https://labs.phaser.io/assets/sprites/purple_ball.png');
-        this.load.image('enemy', 'https://labs.phaser.io/assets/sprites/space-baddie.png');
-        this.load.image('enemyBullet', 'https://labs.phaser.io/assets/sprites/red_ball.png');
-        this.load.image('powerup', 'https://labs.phaser.io/assets/sprites/shinyball.png');
-        // धमाके की चिंगारियों के लिए छोटा पार्टिकल ग्राफिक
-        this.load.image('spark', 'https://labs.phaser.io/assets/particles/blue.png');
+    <!-- Game Over Screen -->
+    <div id="gameOverScreen" class="screen hidden">
+        <h1 style="color: #ff3333; text-shadow: 0 0 10px #ff3333;">GAME OVER</h1>
+        <p id="finalScoreText" style="font-size: 20px; margin-bottom: 10px;">Your Score: 0</p>
+        
+        <!-- Score Submit Form -->
+        <div id="submitForm" class="input-group">
+            <input type="text" id="playerNameInput" placeholder="अपना नाम लिखें" maxlength="15">
+            <button id="submitScoreBtn">SAVE SCORE</button>
+        </div>
+        
+        <h3 style="color: #00ffff; font-size: 16px; margin-top: 10px;">🏆 GLOBAL TOP 10</h3>
+        <div id="gameOverLeaderboard" class="leaderboard-box">Loading scores...</div>
+        
+        <button id="restartBtn" class="hidden">PLAY AGAIN</button>
+    </div>
+</div>
+
+<script>
+    // --- Supabase Connection Configuration ---
+    const SUPABASE_URL = "https://fwpngdcadrjdtsksnwmb.supabase.co";
+    const SUPABASE_KEY = "sb_publishable_Y4zevOt25MfFdZyyLr9r1A_V7dyMTKA";
+    const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    // --- Canvas & Core Setup ---
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const container = document.getElementById('gameContainer');
+
+    function resizeCanvas() {
+        canvas.width = container.clientWidth;
+        canvas.height = container.clientHeight;
     }
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
 
-    function create() {
-        background = this.add.tileSprite(225, 400, 450, 800, 'space');
-        player = this.physics.add.sprite(225, 700, 'ship').setCollideWorldBounds(true).setScale(0.8);
+    // Game states & UI elements
+    let score = 0;
+    let isGameOver = false;
+    let isGameRunning = false;
 
-        bullets = this.physics.add.group({ defaultKey: 'bullet', maxSize: 50 });
-        enemyBullets = this.physics.add.group({ defaultKey: 'enemyBullet', maxSize: 50 });
-        enemies = this.physics.add.group();
-        powerUps = this.physics.add.group();
+    const startScreen = document.getElementById('startScreen');
+    const gameOverScreen = document.getElementById('gameOverScreen');
+    const scoreBoard = document.getElementById('scoreBoard');
+    const shieldBoard = document.getElementById('shieldBoard');
+    const finalScoreText = document.getElementById('finalScoreText');
+    const playerNameInput = document.getElementById('playerNameInput');
+    const submitForm = document.getElementById('submitForm');
+    const restartBtn = document.getElementById('restartBtn');
 
-        // 💥 ब्लास्ट इफेक्ट (Particle Emitter) सेटअप
-        const particles = this.add.particles(0, 0, 'spark', {
-            speed: { min: -100, max: 100 },
-            angle: { min: 0, max: 360 },
-            scale: { start: 0.6, end: 0 },
-            lifespan: 400,
-            gravityY: 0,
-            emitting: false // शुरुआत में बंद रहेगा, दुश्मन मरने पर एक्टिव होगा
-        });
-        particleEmitter = particles;
+    // --- Leaderboard Database Functions ---
+    async function loadLeaderboard() {
+        try {
+            const { data, error } = await supabase
+                .from('leaderboard')
+                .select('player_name, score')
+                .order('score', { ascending: false })
+                .limit(10);
 
-        // 🛡️ शील्ड का ग्राफ़िक्स बनाना
-        shieldGraphics = this.add.graphics();
+            if (error) throw error;
 
-        // टच कंट्रोल
-        this.input.on('pointermove', (pointer) => {
-            player.x = pointer.x;
-            if(pointer.y > 500) player.y = pointer.y;
-        });
-
-        scoreText = this.add.text(16, 16, 'Score: 0', { fontSize: '24px', fill: '#fff', fontFamily: 'Arial' });
-        waveText = this.add.text(16, 50, 'Wave: 1/7', { fontSize: '20px', fill: '#00ff00', fontFamily: 'Arial' });
-
-        healthBar = this.add.graphics();
-        drawHealthBar();
-
-        spawnTimer = this.time.addEvent({ delay: 1500, callback: spawnEnemy, callbackScope: this, loop: true });
-        enemyShootTimer = this.time.addEvent({ delay: 1000, callback: enemiesShoot, callbackScope: this, loop: true });
-
-        this.physics.add.overlap(bullets, enemies, hitEnemy, null, this);
-        this.physics.add.overlap(player, enemies, hitPlayer, null, this);
-        this.physics.add.overlap(player, enemyBullets, hitByEnemyBullet, null, this);
-        this.physics.add.overlap(player, powerUps, collectPowerUp, null, this);
-    }
-
-    function update(time, delta) {
-        background.tilePositionY -= 3;
-
-        if (time > lastFired && health > 0) {
-            shootBullet();
-            lastFired = time + 200; 
-        }
-
-        // शील्ड को प्लेयर के जहाज के साथ-साथ घुमाना
-        drawShield();
-
-        bullets.children.each(b => { if (b.active && b.y < 0) { b.setActive(false).setVisible(false); } });
-        enemyBullets.children.each(eb => { if (eb.active && eb.y > 800) { eb.setActive(false).setVisible(false); } });
-        enemies.children.each(e => { if (e.active && e.y > 820) { e.destroy(); reduceHealth(5); } });
-    }
-
-    function shootBullet() {
-        if (gunLevel === 1) {
-            let bullet = bullets.get(player.x, player.y - 30);
-            if (bullet) bullet.setActive(true).setVisible(true).setScale(0.5).body.velocity.setTo(0, -700);
-        } else {
-            let b1 = bullets.get(player.x, player.y - 30);
-            let b2 = bullets.get(player.x - 15, player.y - 20);
-            let b3 = bullets.get(player.x + 15, player.y - 20);
-            if (b1) b1.setActive(true).setVisible(true).setScale(0.5).body.velocity.setTo(0, -700);
-            if (b2) b2.setActive(true).setVisible(true).setScale(0.5).body.velocity.setTo(-100, -650);
-            if (b3) b3.setActive(true).setVisible(true).setScale(0.5).body.velocity.setTo(100, -650);
-        }
-    }
-
-    function spawnEnemy() {
-        if (health <= 0 || enemiesLeftToSpawn <= 0) return;
-        let x = Phaser.Math.Between(30, 420);
-        let enemy = enemies.create(x, -20, 'enemy');
-        if (enemy) {
-            enemy.setVelocityY(Phaser.Math.Between(120, 200) + (currentWave * 15));
-            enemiesLeftToSpawn--;
-        }
-    }
-
-    function enemiesShoot() {
-        if (health <= 0) return;
-        enemies.children.each(enemy => {
-            if (enemy.active && Phaser.Math.Between(1, 10) > 5) {
-                let eBullet = enemyBullets.get(enemy.x, enemy.y + 20);
-                if (eBullet) eBullet.setActive(true).setVisible(true).setScale(0.6).body.velocity.y = 400;
+            let html = "";
+            if (data.length === 0) {
+                html = "<div class='lb-row' style='justify-content: center;'>अभी कोई स्कोर नहीं है! पहले बनिए।</div>";
+            } else {
+                data.forEach((row, index) => {
+                    html += `
+                        <div class="lb-row">
+                            <span class="rank">#${index + 1}</span>
+                            <span class="p-name">${escapeHTML(row.player_name)}</span>
+                            <span class="p-score">${row.score}</span>
+                        </div>`;
+                });
             }
-        });
+            document.getElementById('startLeaderboard').innerHTML = html;
+            document.getElementById('gameOverLeaderboard').innerHTML = html;
+        } catch (err) {
+            console.error("Error fetching leaderboard:", err);
+            const errMsg = "<div class='lb-row' style='color:#ff3333; justify-content:center;'>लीडरबोर्ड लोड नहीं हो सका</div>";
+            document.getElementById('startLeaderboard').innerHTML = errMsg;
+            document.getElementById('gameOverLeaderboard').innerHTML = errMsg;
+        }
     }
 
-    function hitEnemy(bullet, enemy) {
-        if (bullet.active && enemy.active) {
-            bullet.setActive(false).setVisible(false);
-            
-            // 💥 दुश्मन मरने पर धमाके का इफ़ेक्ट दिखाना
-            particleEmitter.explode(15, enemy.x, enemy.y);
+    async function submitScore() {
+        const name = playerNameInput.value.trim();
+        if (!name) {
+            alert("कृपया स्कोर सेव करने के लिए अपना नाम लिखें!");
+            return;
+        }
 
-            // रैंडम पावर-अप गिरना (35% चांस)
-            if (Phaser.Math.Between(1, 3) === 1) {
-                let pUp = powerUps.create(enemy.x, enemy.y, 'powerup');
-                pUp.setVelocityY(150).setScale(0.8);
-                
-                // 50% चांस कि गन अपग्रेड (ग्रीन) गिरेगी या शील्ड (ब्लू) गिरेगी
-                if(Phaser.Math.Between(1, 2) === 1) {
-                    pUp.name = "tripleGun";
-                    pUp.setTint(0x00ff00); // हरा रंग गन के लिए
-                } else {
-                    pUp.name = "shield";
-                    pUp.setTint(0x00ffff); // नीला रंग शील्ड के लिए
+        document.getElementById('submitScoreBtn').disabled = true;
+        document.getElementById('submitScoreBtn').innerText = "SAVING...";
+
+        try {
+            const { error } = await supabase
+                .from('leaderboard')
+                .insert([{ player_name: name, score: score }]);
+
+            if (error) throw error;
+
+            // Hide form and show restart button after success
+            submitForm.classList.add('hidden');
+            restartBtn.classList.remove('hidden');
+            await loadLeaderboard(); // refresh leaderboard list
+        } catch (err) {
+            console.error("Error submitting score:", err);
+            alert("स्कोर सेव करने में दिक्कत आई, कृपया दोबारा कोशिश करें।");
+            document.getElementById('submitScoreBtn').disabled = false;
+            document.getElementById('submitScoreBtn').innerText = "SAVE SCORE";
+        }
+    }
+
+    function escapeHTML(str) {
+        return str.replace(/[&<>'"]/g, 
+            tag => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag] || tag)
+        );
+    }
+
+    // Load leaderboard instantly on startup
+    loadLeaderboard();
+
+    // --- Game Entities Classes ---
+    class Player {
+        constructor() {
+            this.width = 44;
+            this.height = 40;
+            this.x = canvas.width / 2 - this.width / 2;
+            this.y = canvas.height - 80;
+            this.shield = 100;
+        }
+        draw() {
+            // Draw Spaceship Body
+            ctx.fillStyle = '#00ffff';
+            ctx.beginPath();
+            ctx.moveTo(this.x + this.width / 2, this.y);
+            ctx.lineTo(this.x + this.width, this.y + this.height);
+            ctx.lineTo(this.x + this.width * 0.8, this.y + this.height * 0.8);
+            ctx.lineTo(this.x + this.width * 0.2, this.y + this.height * 0.8);
+            ctx.lineTo(this.x, this.y + this.height);
+            ctx.closePath();
+            ctx.fill();
+
+            // Cockpit
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            ctx.moveTo(this.x + this.width / 2, this.y + 8);
+            ctx.lineTo(this.x + this.width * 0.6, this.y + 24);
+            ctx.lineTo(this.x + this.width * 0.4, this.y + 24);
+            ctx.closePath();
+            ctx.fill();
+
+            // Active Shield Ring Effect
+            if (this.shield > 0) {
+                ctx.strokeStyle = `rgba(0, 255, 0, ${this.shield / 100 * 0.5})`;
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.arc(this.x + this.width / 2, this.y + this.height / 2, this.width * 0.8, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+        }
+    }
+
+    class Laser {
+        constructor(x, y) {
+            this.width = 4;
+            this.height = 15;
+            this.x = x - this.width / 2;
+            this.y = y;
+            this.speed = 10;
+        }
+        update() { this.y -= this.speed; }
+        draw() {
+            ctx.fillStyle = '#ff00ff';
+            ctx.shadowColor = '#ff00ff';
+            ctx.shadowBlur = 8;
+            ctx.fillRect(this.x, this.y, this.width, this.height);
+            ctx.shadowBlur = 0; // Reset
+        }
+    }
+
+    class Asteroid {
+        constructor() {
+            this.size = Math.random() * 30 + 20; // Size 20 to 50
+            this.x = Math.random() * (canvas.width - this.size);
+            this.y = -this.size;
+            this.speed = Math.random() * 3 + 2;
+            this.rotation = 0;
+            this.rotSpeed = Math.random() * 0.04 - 0.02;
+        }
+        update() {
+            this.y += this.speed;
+            this.rotation += this.rotSpeed;
+        }
+        draw() {
+            ctx.save();
+            ctx.translate(this.x + this.size/2, this.y + this.size/2);
+            ctx.rotate(this.rotation);
+            ctx.fillStyle = '#795548';
+            ctx.strokeStyle = '#5d4037';
+            ctx.lineWidth = 2;
+            
+            // Draw rocky polygon shape
+            ctx.beginPath();
+            ctx.moveTo(0, -this.size/2);
+            ctx.lineTo(this.size/2, -this.size/3);
+            ctx.lineTo(this.size/2, this.size/3);
+            ctx.lineTo(0, this.size/2);
+            ctx.lineTo(-this.size/2, this.size/3);
+            ctx.lineTo(-this.size/2, -this.size/3);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+            ctx.restore();
+        }
+    }
+
+    class Particle {
+        constructor(x, y, color) {
+            this.x = x;
+            this.y = y;
+            this.size = Math.random() * 3 + 1;
+            this.speedX = Math.random() * 6 - 3;
+            this.speedY = Math.random() * 6 - 3;
+            this.life = 1.0;
+            this.decay = Math.random() * 0.05 + 0.02;
+            this.color = color;
+        }
+        update() {
+            this.x += this.speedX;
+            this.y += this.speedY;
+            this.life -= this.decay;
+        }
+        draw() {
+            ctx.fillStyle = this.color.replace(')', `, ${this.life})`).replace('rgb', 'rgba');
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+
+    // Arrays & Game Systems Initialization
+    let player;
+    let lasers = [];
+    let asteroids = [];
+    let particles = [];
+    let spawnTimer = 0;
+    let shootTimer = 0;
+
+    function initGame() {
+        player = new Player();
+        lasers = [];
+        asteroids = [];
+        particles = [];
+        score = 0;
+        isGameOver = false;
+        spawnTimer = 0;
+        shootTimer = 0;
+        
+        scoreBoard.innerText = `SCORE: ${score}`;
+        shieldBoard.innerText = `SHIELD: 100%`;
+        shieldBoard.style.color = '#00ff00';
+    }
+
+    function createExplosion(x, y, color = 'rgb(255, 100, 0)') {
+        for(let i=0; i<15; i++) {
+            particles.push(new Particle(x, y, color));
+        }
+    }
+
+    // --- Collision detection bounding boxes ---
+    function checkCollision(rect1, rect2) {
+        return rect1.x < rect2.x + rect2.size &&
+               rect1.x + rect1.width > rect2.x &&
+               rect1.y < rect2.y + rect2.size &&
+               rect1.y + rect1.height > rect2.y;
+    }
+
+    // --- Input & Controls Management (Mobile Touch Friendly) ---
+    function handleMove(clientX) {
+        if (!isGameRunning || isGameOver) return;
+        const rect = canvas.getBoundingClientRect();
+        const rootX = clientX - rect.left;
+        player.x = rootX - player.width / 2;
+        
+        // Boundaries restriction
+        if (player.x < 0) player.x = 0;
+        if (player.x > canvas.width - player.width) player.x = canvas.width - player.width;
+    }
+
+    // Touch event listeners
+    window.addEventListener('touchmove', (e) => {
+        if(e.touches.length > 0) handleMove(e.touches[0].clientX);
+    }, { passive: true });
+    
+    window.addEventListener('mousemove', (e) => {
+        handleMove(e.clientX);
+    });
+
+    // --- Core Game Loop Loop ---
+    function gameLoop() {
+        if (!isGameRunning) return;
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        if (!isGameOver) {
+            player.draw();
+
+            // Handle Automatic Continuous Shooting
+            shootTimer++;
+            if (shootTimer >= 12) { // Fire every 12 frames
+                lasers.push(new Laser(player.x + player.width / 2, player.y));
+                shootTimer = 0;
+            }
+
+            // Spawn Obstacle Asteroids
+            spawnTimer++;
+            if (spawnTimer >= 35) { // Spawn interval frequency
+                asteroids.push(new Asteroid());
+                spawnTimer = 0;
+            }
+        }
+
+        // Update & Render Lasers
+        for (let i = lasers.length - 1; i >= 0; i--) {
+            lasers[i].update();
+            lasers[i].draw();
+            if (lasers[i].y < -20) lasers.splice(i, 1);
+        }
+
+        // Update & Render Asteroids
+        for (let i = asteroids.length - 1; i >= 0; i--) {
+            asteroids[i].update();
+            asteroids[i].draw();
+
+            if (!isGameOver) {
+                // Check if laser hit an asteroid
+                for (let j = lasers.length - 1; j >= 0; j--) {
+                    if (checkCollision(lasers[j], asteroids[i])) {
+                        createExplosion(asteroids[i].x + asteroids[i].size/2, asteroids[i].y + asteroids[i].size/2, 'rgb(0, 255, 255)');
+                        asteroids.splice(i, 1);
+                        lasers.splice(j, 1);
+                        score += 10;
+                        scoreBoard.innerText = `SCORE: ${score}`;
+                        break;
+                    }
                 }
             }
 
-            enemy.destroy(); 
-            score += 10;
-            scoreText.setText('Score: ' + score);
-            enemiesKilledInWave++;
-            checkWaveStatus();
-        }
-    }
-
-    function collectPowerUp(player, powerup) {
-        if (powerup.name === "tripleGun") {
-            gunLevel = 3;
-            this.time.delayedCall(6000, () => { gunLevel = 1; }, [], this);
-        } else if (powerup.name === "shield") {
-            isShieldActive = true;
-            // 6 सेकंड बाद शील्ड अपने आप खत्म हो जाएगी
-            this.time.delayedCall(6000, () => { isShieldActive = false; shieldGraphics.clear(); }, [], this);
-        }
-        powerup.destroy();
-    }
-
-    // शील्ड को स्क्रीन पर ड्रा करने का फंक्शन
-    function drawShield() {
-        shieldGraphics.clear();
-        if (isShieldActive && health > 0) {
-            shieldGraphics.lineStyle(3, 0x00ffff, 0.8); // आसमानी नीली बाउंड्री
-            shieldGraphics.fillStyle(0x00ffff, 0.15);  // हल्का ट्रांसपेरेंट रंग अंदर
-            shieldGraphics.strokeCircle(player.x, player.y, 45);
-            shieldGraphics.fillCircle(player.x, player.y, 45);
-        }
-    }
-
-    function hitByEnemyBullet(player, bullet) {
-        if (bullet.active) {
-            bullet.setActive(false).setVisible(false);
-            if (isShieldActive) {
-                // अगर शील्ड ऑन है, तो कोई डैमेज नहीं होगा!
-                return;
+            // Check if asteroid hits player ship
+            if (asteroids[i] && checkCollision(player, asteroids[i])) {
+                createExplosion(asteroids[i].x + asteroids[i].size/2, asteroids[i].y + asteroids[i].size/2, 'rgb(255, 50, 50)');
+                player.shield -= 25;
+                asteroids.splice(i, 1);
+                
+                if (player.shield <= 0) {
+                    player.shield = 0;
+                    endGame();
+                }
+                
+                shieldBoard.innerText = `SHIELD: ${player.shield}%`;
+                if(player.shield <= 25) shieldBoard.style.color = '#ff3333';
+                else if(player.shield <= 50) shieldBoard.style.color = '#ff9800';
             }
-            reduceHealth(15);
-        }
-    }
 
-    function hitPlayer(player, enemy) {
-        if (enemy.active) { 
-            enemy.destroy(); 
-            if (isShieldActive) return; // शील्ड होने पर टक्कर से भी बचाव
-            reduceHealth(25); 
-        }
-    }
-
-    function reduceHealth(amount) {
-        health -= amount;
-        if (health < 0) health = 0;
-        drawHealthBar();
-        if (health === 0) {
-            player.setTint(0xff0000);
-            spawnTimer.destroy();
-            enemyShootTimer.destroy();
-            alert("Game Over! स्कोर: " + score);
-            window.location.reload();
-        }
-    }
-
-    function checkWaveStatus() {
-        let totalEnemiesInWave = currentWave * 5; 
-        if (enemiesKilledInWave >= totalEnemiesInWave) {
-            if (currentWave < maxWaves) {
-                currentWave++;
-                enemiesKilledInWave = 0;
-                enemiesLeftToSpawn = currentWave * 5;
-                waveText.setText('Wave: ' + currentWave + '/' + maxWaves);
-                alert("Wave " + (currentWave-1) + " साफ़! तैयार हो जाइए Wave " + currentWave + " के लिए!");
-            } else {
-                alert("अद्भुत! आपने गैलेक्सी को पूरी तरह बचा लिया। फाइनल स्कोर: " + score);
-                window.location.reload();
+            // Remove out of bounds asteroids
+            if (asteroids[i] && asteroids[i].y > canvas.height + 50) {
+                asteroids.splice(i, 1);
             }
         }
+
+        // Process Explosions Particles
+        for (let i = particles.length - 1; i >= 0; i--) {
+            particles[i].update();
+            particles[i].draw();
+            if (particles[i].life <= 0) particles.splice(i, 1);
+        }
+
+        requestAnimationFrame(gameLoop);
     }
 
-    function drawHealthBar() {
-        healthBar.clear();
-        healthBar.fillStyle(0x000000, 1);
-        healthBar.fillRect(280, 16, 150, 20);
-        if (health > 40) healthBar.fillStyle(0x00ff00, 1);
-        else healthBar.fillStyle(0xff0000, 1);
-        let width = (health / 100) * 150;
-        healthBar.fillRect(280, 16, width, 20);
+    function endGame() {
+        isGameOver = true;
+        isGameRunning = false;
+        createExplosion(player.x + player.width/2, player.y + player.height/2, 'rgb(255, 150, 0)');
+        
+        finalScoreText.innerText = `आपका स्कोर: ${score}`;
+        playerNameInput.value = "";
+        
+        // Reset submit interface layout form view state
+        submitForm.classList.remove('hidden');
+        document.getElementById('submitScoreBtn').disabled = false;
+        document.getElementById('submitScoreBtn').innerText = "SAVE SCORE";
+        restartBtn.classList.add('hidden');
+        
+        gameOverScreen.classList.remove('hidden');
+        loadLeaderboard(); // updates global leader ranks real-time
     }
+
+    // --- Action Triggers UI Wireframes Event Listeners ---
+    document.getElementById('startBtn').addEventListener('click', () => {
+        startScreen.classList.add('hidden');
+        isGameRunning = true;
+        initGame();
+        requestAnimationFrame(gameLoop);
+    });
+
+    document.getElementById('submitScoreBtn').addEventListener('click', submitScore);
+
+    restartBtn.addEventListener('click', () => {
+        gameOverScreen.classList.add('hidden');
+        isGameRunning = true;
+        initGame();
+    });
 </script>
-
 </body>
 </html>
+
