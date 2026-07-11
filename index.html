@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Galaxy Space Shooter - Shield & Explosions</title>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+    <style>
+        body { margin: 0; padding: 0; background-color: #000; overflow: hidden; }
+        canvas { display: block; margin: 0 auto; }
+    </style>
+</head>
+<body>
+
+<script>
+    const config = {
+        type: Phaser.AUTO,
+        width: 450,
+        height: 800,
+        physics: {
+            default: 'arcade',
+            arcade: { gravity: { y: 0 }, debug: false }
+        },
+        scene: { preload: preload, create: create, update: update }
+    };
+
+    const game = new Phaser.Game(config);
+    let player, background, bullets, enemies, enemyBullets, powerUps, particleEmitter;
+    let shieldGraphics; // शील्ड का विज़ुअल दिखाने के लिए
+    let lastFired = 0, score = 0, health = 100;
+    let scoreText, waveText, healthBar;
+    
+    let currentWave = 1, maxWaves = 7;
+    let enemiesLeftToSpawn = 5, enemiesKilledInWave = 0;
+    let spawnTimer, enemyShootTimer;
+
+    let gunLevel = 1; 
+    let isShieldActive = false; // क्या शील्ड ऑन है?
+
+    function preload() {
+        this.load.image('space', 'https://labs.phaser.io/assets/skies/space.jpg');
+        this.load.image('ship', 'https://labs.phaser.io/assets/sprites/fmship.png');
+        this.load.image('bullet', 'https://labs.phaser.io/assets/sprites/purple_ball.png');
+        this.load.image('enemy', 'https://labs.phaser.io/assets/sprites/space-baddie.png');
+        this.load.image('enemyBullet', 'https://labs.phaser.io/assets/sprites/red_ball.png');
+        this.load.image('powerup', 'https://labs.phaser.io/assets/sprites/shinyball.png');
+        // धमाके की चिंगारियों के लिए छोटा पार्टिकल ग्राफिक
+        this.load.image('spark', 'https://labs.phaser.io/assets/particles/blue.png');
+    }
+
+    function create() {
+        background = this.add.tileSprite(225, 400, 450, 800, 'space');
+        player = this.physics.add.sprite(225, 700, 'ship').setCollideWorldBounds(true).setScale(0.8);
+
+        bullets = this.physics.add.group({ defaultKey: 'bullet', maxSize: 50 });
+        enemyBullets = this.physics.add.group({ defaultKey: 'enemyBullet', maxSize: 50 });
+        enemies = this.physics.add.group();
+        powerUps = this.physics.add.group();
+
+        // 💥 ब्लास्ट इफेक्ट (Particle Emitter) सेटअप
+        const particles = this.add.particles(0, 0, 'spark', {
+            speed: { min: -100, max: 100 },
+            angle: { min: 0, max: 360 },
+            scale: { start: 0.6, end: 0 },
+            lifespan: 400,
+            gravityY: 0,
+            emitting: false // शुरुआत में बंद रहेगा, दुश्मन मरने पर एक्टिव होगा
+        });
+        particleEmitter = particles;
+
+        // 🛡️ शील्ड का ग्राफ़िक्स बनाना
+        shieldGraphics = this.add.graphics();
+
+        // टच कंट्रोल
+        this.input.on('pointermove', (pointer) => {
+            player.x = pointer.x;
+            if(pointer.y > 500) player.y = pointer.y;
+        });
+
+        scoreText = this.add.text(16, 16, 'Score: 0', { fontSize: '24px', fill: '#fff', fontFamily: 'Arial' });
+        waveText = this.add.text(16, 50, 'Wave: 1/7', { fontSize: '20px', fill: '#00ff00', fontFamily: 'Arial' });
+
+        healthBar = this.add.graphics();
+        drawHealthBar();
+
+        spawnTimer = this.time.addEvent({ delay: 1500, callback: spawnEnemy, callbackScope: this, loop: true });
+        enemyShootTimer = this.time.addEvent({ delay: 1000, callback: enemiesShoot, callbackScope: this, loop: true });
+
+        this.physics.add.overlap(bullets, enemies, hitEnemy, null, this);
+        this.physics.add.overlap(player, enemies, hitPlayer, null, this);
+        this.physics.add.overlap(player, enemyBullets, hitByEnemyBullet, null, this);
+        this.physics.add.overlap(player, powerUps, collectPowerUp, null, this);
+    }
+
+    function update(time, delta) {
+        background.tilePositionY -= 3;
+
+        if (time > lastFired && health > 0) {
+            shootBullet();
+            lastFired = time + 200; 
+        }
+
+        // शील्ड को प्लेयर के जहाज के साथ-साथ घुमाना
+        drawShield();
+
+        bullets.children.each(b => { if (b.active && b.y < 0) { b.setActive(false).setVisible(false); } });
+        enemyBullets.children.each(eb => { if (eb.active && eb.y > 800) { eb.setActive(false).setVisible(false); } });
+        enemies.children.each(e => { if (e.active && e.y > 820) { e.destroy(); reduceHealth(5); } });
+    }
+
+    function shootBullet() {
+        if (gunLevel === 1) {
+            let bullet = bullets.get(player.x, player.y - 30);
+            if (bullet) bullet.setActive(true).setVisible(true).setScale(0.5).body.velocity.setTo(0, -700);
+        } else {
+            let b1 = bullets.get(player.x, player.y - 30);
+            let b2 = bullets.get(player.x - 15, player.y - 20);
+            let b3 = bullets.get(player.x + 15, player.y - 20);
+            if (b1) b1.setActive(true).setVisible(true).setScale(0.5).body.velocity.setTo(0, -700);
+            if (b2) b2.setActive(true).setVisible(true).setScale(0.5).body.velocity.setTo(-100, -650);
+            if (b3) b3.setActive(true).setVisible(true).setScale(0.5).body.velocity.setTo(100, -650);
+        }
+    }
+
+    function spawnEnemy() {
+        if (health <= 0 || enemiesLeftToSpawn <= 0) return;
+        let x = Phaser.Math.Between(30, 420);
+        let enemy = enemies.create(x, -20, 'enemy');
+        if (enemy) {
+            enemy.setVelocityY(Phaser.Math.Between(120, 200) + (currentWave * 15));
+            enemiesLeftToSpawn--;
+        }
+    }
+
+    function enemiesShoot() {
+        if (health <= 0) return;
+        enemies.children.each(enemy => {
+            if (enemy.active && Phaser.Math.Between(1, 10) > 5) {
+                let eBullet = enemyBullets.get(enemy.x, enemy.y + 20);
+                if (eBullet) eBullet.setActive(true).setVisible(true).setScale(0.6).body.velocity.y = 400;
+            }
+        });
+    }
+
+    function hitEnemy(bullet, enemy) {
+        if (bullet.active && enemy.active) {
+            bullet.setActive(false).setVisible(false);
+            
+            // 💥 दुश्मन मरने पर धमाके का इफ़ेक्ट दिखाना
+            particleEmitter.explode(15, enemy.x, enemy.y);
+
+            // रैंडम पावर-अप गिरना (35% चांस)
+            if (Phaser.Math.Between(1, 3) === 1) {
+                let pUp = powerUps.create(enemy.x, enemy.y, 'powerup');
+                pUp.setVelocityY(150).setScale(0.8);
+                
+                // 50% चांस कि गन अपग्रेड (ग्रीन) गिरेगी या शील्ड (ब्लू) गिरेगी
+                if(Phaser.Math.Between(1, 2) === 1) {
+                    pUp.name = "tripleGun";
+                    pUp.setTint(0x00ff00); // हरा रंग गन के लिए
+                } else {
+                    pUp.name = "shield";
+                    pUp.setTint(0x00ffff); // नीला रंग शील्ड के लिए
+                }
+            }
+
+            enemy.destroy(); 
+            score += 10;
+            scoreText.setText('Score: ' + score);
+            enemiesKilledInWave++;
+            checkWaveStatus();
+        }
+    }
+
+    function collectPowerUp(player, powerup) {
+        if (powerup.name === "tripleGun") {
+            gunLevel = 3;
+            this.time.delayedCall(6000, () => { gunLevel = 1; }, [], this);
+        } else if (powerup.name === "shield") {
+            isShieldActive = true;
+            // 6 सेकंड बाद शील्ड अपने आप खत्म हो जाएगी
+            this.time.delayedCall(6000, () => { isShieldActive = false; shieldGraphics.clear(); }, [], this);
+        }
+        powerup.destroy();
+    }
+
+    // शील्ड को स्क्रीन पर ड्रा करने का फंक्शन
+    function drawShield() {
+        shieldGraphics.clear();
+        if (isShieldActive && health > 0) {
+            shieldGraphics.lineStyle(3, 0x00ffff, 0.8); // आसमानी नीली बाउंड्री
+            shieldGraphics.fillStyle(0x00ffff, 0.15);  // हल्का ट्रांसपेरेंट रंग अंदर
+            shieldGraphics.strokeCircle(player.x, player.y, 45);
+            shieldGraphics.fillCircle(player.x, player.y, 45);
+        }
+    }
+
+    function hitByEnemyBullet(player, bullet) {
+        if (bullet.active) {
+            bullet.setActive(false).setVisible(false);
+            if (isShieldActive) {
+                // अगर शील्ड ऑन है, तो कोई डैमेज नहीं होगा!
+                return;
+            }
+            reduceHealth(15);
+        }
+    }
+
+    function hitPlayer(player, enemy) {
+        if (enemy.active) { 
+            enemy.destroy(); 
+            if (isShieldActive) return; // शील्ड होने पर टक्कर से भी बचाव
+            reduceHealth(25); 
+        }
+    }
+
+    function reduceHealth(amount) {
+        health -= amount;
+        if (health < 0) health = 0;
+        drawHealthBar();
+        if (health === 0) {
+            player.setTint(0xff0000);
+            spawnTimer.destroy();
+            enemyShootTimer.destroy();
+            alert("Game Over! स्कोर: " + score);
+            window.location.reload();
+        }
+    }
+
+    function checkWaveStatus() {
+        let totalEnemiesInWave = currentWave * 5; 
+        if (enemiesKilledInWave >= totalEnemiesInWave) {
+            if (currentWave < maxWaves) {
+                currentWave++;
+                enemiesKilledInWave = 0;
+                enemiesLeftToSpawn = currentWave * 5;
+                waveText.setText('Wave: ' + currentWave + '/' + maxWaves);
+                alert("Wave " + (currentWave-1) + " साफ़! तैयार हो जाइए Wave " + currentWave + " के लिए!");
+            } else {
+                alert("अद्भुत! आपने गैलेक्सी को पूरी तरह बचा लिया। फाइनल स्कोर: " + score);
+                window.location.reload();
+            }
+        }
+    }
+
+    function drawHealthBar() {
+        healthBar.clear();
+        healthBar.fillStyle(0x000000, 1);
+        healthBar.fillRect(280, 16, 150, 20);
+        if (health > 40) healthBar.fillStyle(0x00ff00, 1);
+        else healthBar.fillStyle(0xff0000, 1);
+        let width = (health / 100) * 150;
+        healthBar.fillRect(280, 16, width, 20);
+    }
+</script>
+
+</body>
+</html>
